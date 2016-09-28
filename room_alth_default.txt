@@ -16,16 +16,24 @@ uniform vec4 iClipPlane; //equation of clip plane (xyz are normal, w is the offs
 
 const float deg2rad = 57.29;
 
-vec3 ambientLight = vec3(0.1,0.1,0.1);	//Total acumulated ambient light for pixel
+vec3 ambientLight = vec3(0.0, 0.0, 0.0);	//Total acumulated ambient light for pixel
 vec3 diffuseLight = vec3(0,0,0);	//Total acumulated diffuse light for pixel
 vec3 specularLight = vec3(0,0,0);	//Total acumulated specular light for pixel
+
+vec3 normal;
+vec3 viewVector;
+
+void lightingPreCalc() {
+	normal = normalize(iNormalWorld);	
+	viewVector = normalize(iPositionWorld-iPlayerPosition);
+}
 
 //Prototype for generated function
 void applySceneLights();
 
 // Util functions
 float flicker(float offset) {
-	float t = offset + (iGlobalTime * 30.0);
+	float t = offset + (iGlobalTime * 40.0);
 	return sin(t*0.2) * cos(t * 0.3) * sin(t * 0.4) ;
 }
 
@@ -46,31 +54,22 @@ vec3 flickerPos(vec3 pos) {
 */
 void light(vec3 pos, vec3 colour, float near, float range, float falloff) {
 
-	vec3 n = normalize(iNormalWorld);
-	vec3 lightDir = normalize(pos - iPositionWorld);
-	float dist = abs(length(pos - iPositionWorld));
+	vec3 lightDir = pos - iPositionWorld;
+	float dist = abs(length(lightDir));
+	lightDir /= dist;
 	
-	//float range = length(colour);
+	float tangent = dot(lightDir,normal);
+	if(tangent < 0.0) return;
+	
+	float i = clamp(1.0 / pow(dist-near,falloff), 0.0, 1.0);
+	diffuseLight += i * tangent * colour;
+	
+	vec3 rVector = normalize(2.0 * normal * dot(normal, lightDir) - lightDir);
 
-	if(dist > range) {
-		return; //Out of range
-	}
-
-	float tangent = dot(lightDir,n);
-	if(tangent > 0.0) {
-		dist -= 1.0;
-		dist -= near;
-
-		float i = clamp(1.0 / pow(dist,falloff), 0.0, 1.0);
-		diffuseLight += i * tangent * colour;
-	}
-
-	vec3 rVector = normalize(2.0 * n * dot(n, lightDir) - lightDir);
-	vec3 viewVector = -normalize(iPositionWorld-iPlayerPosition);
-	float RdotV = dot(rVector, viewVector);
+	float RdotV = dot(rVector, -viewVector);
 	
 	if (RdotV > 0.0)
-		specularLight += 0.1 * colour * pow(RdotV, 100.0) ;
+		specularLight += i * colour * pow(RdotV, 100.0) ;
 }
 
 /*
@@ -83,36 +82,31 @@ void light(vec3 pos, vec3 colour, float near, float range, float falloff) {
 	 (unrealistic) a sharp edge. 5-15 degree seperation looks quite nice in most situations
 */
 void spotlight(vec3 pos, vec3 direction, vec3 col, float outerCone, float innerCone, float range, float falloff){
-	vec3 n = normalize(iNormalWorld);
-	vec3 lightDir = normalize(pos - iPositionWorld);
-	float dist = abs(length(pos - iPositionWorld));
-	
-	if(dist > range) {
-		return; //Out of range
-	}
 
+	vec3 lightDir = normalize(pos - iPositionWorld);
+	
 	float theta = deg2rad * acos(dot(direction, -lightDir));
 	if(theta > outerCone){	//Outside of light cone
 		return;
 	}
 
-	float tangent = dot(lightDir,n);
+	float tangent = dot(lightDir,normal);
 	if(tangent < 0.0) {
 		return;
 	}
-
+	
+	float dist = abs(length(pos - iPositionWorld));
 	float i = 1.0 - (theta - innerCone) / (outerCone-innerCone);
 
 	i= i / pow(dist,falloff);
 
 	diffuseLight += clamp(i * tangent, 0.0, 1.0) * col;
 
-	vec3 rVector = normalize(2.0 * n * dot(n, lightDir) - lightDir);
-	vec3 viewVector = -normalize(iPositionWorld-iPlayerPosition);
+	vec3 rVector = normalize(2.0 * normal * dot(normal, lightDir) - lightDir);
 	float RdotV = dot(rVector, viewVector);
 	
 	if (RdotV > 0.0)
-		specularLight += 0.1 * col * pow(RdotV, 100.0) ;
+		specularLight += i * col * pow(RdotV, 100.0) ;
 
 }
 
@@ -120,15 +114,14 @@ void spotlight(vec3 pos, vec3 direction, vec3 col, float outerCone, float innerC
 	Directional light source
 */
 void directional(vec3 direction, vec3 colour) {
-	vec3 n = normalize(iNormalWorld);
 	vec3 lightDir = -normalize(direction);
 	
-	float tangent = dot(lightDir,n);
+	float tangent = dot(lightDir,normal);
 	if(tangent > 0.0) {
 		diffuseLight += tangent * colour;
 	}
 
-	vec3 rVector = normalize(2.0 * n * dot(n, lightDir) - lightDir);
+	vec3 rVector = normalize(2.0 * normal * dot(normal, lightDir) - lightDir);
 	vec3 viewVector = -normalize(iPositionWorld-iPlayerPosition);
 	float RdotV = dot(rVector, viewVector);
 	
@@ -141,7 +134,15 @@ void directional(vec3 direction, vec3 colour) {
 	
 */
 void torchlight(vec3 pos, vec3 colour, float near, float range, float falloff) {
-	light(flickerPos(pos),colour, near, range,falloff); 
+	light(
+		flickerPos(
+			pos
+		),
+		colour,
+		near,
+		range,
+		falloff
+	); 
 }
 
 /* 
@@ -161,17 +162,15 @@ void flashlight(vec3 colour) {
 	}
 }
 
-
-
-
 int g_Debug = 0;
 
-void main()
-{
+void main() {
 	//Clip plane check
 	if (iUseClipPlane == 1 && dot(iPositionWorld, iClipPlane.xyz) < iClipPlane.w) {
 		discard;
 	}
+
+	normal = normalize(normal);
 	
 	vec4 ka = gl_FrontMaterial.ambient;
 	vec4 kd = gl_FrontMaterial.diffuse;
@@ -191,6 +190,7 @@ void main()
 		discard;
 	}
 
+	lightingPreCalc();
 	applySceneLights();
     
 	vec3 col = kd.rgb * (diffuseLight + ambientLight + ka.rgb) + (ks.rgb * specularLight);
@@ -202,4 +202,34 @@ void main()
 		}
 	}
 }
-void applySceneLights() {}
+void applySceneLights()
+{
+
+	ambientLight = vec3(0.0, 0.0, 0.0);	//Total acumulated ambient light for pixel
+
+	torchlight(
+		vec3( 0, 1, -1 ),             // pos
+		vec3( 1.000, 0.500, 0.200 ),  // colour
+		0.00,                         // near
+		10.000,                       // range
+		1.000                         // falloff
+	);
+
+	spotlight(
+		vec3 ( 1.0, 1.0, 0.0 )  // position
+		vec3 ( 0.0, 1.0, 0.0 ), // direction
+		vec3 ( 1.0, 0.0, 1.0 ), // colour
+		float 3.0,              // outer cone
+		float 2.8,              // inner cone
+		float 10.0,             // range
+		float 1.0               // falloff
+	);
+
+	light(
+		vec3 (1,1,1), // position
+		vec3 (1,0,0), // colour
+		float 1.1,    // near
+		float 2.2,    // range
+		float 1.2     // falloff
+	);
+}
